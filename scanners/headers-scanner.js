@@ -33,7 +33,7 @@ const HEADER_CHECKS = [
   { name: 'Content-Security-Policy', key: 'content-security-policy', severity: 'high', cwe: 'CWE-346',
     check: (v) => {
       if (!v) return { ok: false, detail: 'CSP missing — XSS and data injection possible' };
-      if (v.includes("'unsafe-inline'") || v.includes("'unsafe-eval'")) return { ok: false, detail: 'CSP contains unsafe-inline or unsafe-eval' };
+      if (v.includes("'unsafe-inline'") || v.includes("unsafe-inline") || v.includes("'unsafe-eval'") || v.includes("unsafe-eval")) return { ok: false, detail: 'CSP contains unsafe-inline or unsafe-eval' };
       return { ok: true };
     },
     remediation: "Define strict CSP: default-src 'self'; script-src 'self'; object-src 'none'; frame-ancestors 'none'"
