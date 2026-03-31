@@ -24,6 +24,12 @@ const SECRET_PATTERNS = [
   { pattern: /[Ss][Ee][Cc][Rr][Ee][Tt]\s*[=:]\s*['"][a-zA-Z0-9_\-]{20,}['"]/g, type: 'Potential Secret Token', severity: 'high', cwe: 'CWE-798' },
   { pattern: /[Bb][Ee][Aa][Rr][Ee][Rr]\s+[Tt][Oo][Kk][Ee][Nn]\s*[=:]\s*['"][a-zA-Z0-9_\-.]{20,}['"]/g, type: 'Bearer Token', severity: 'high', cwe: 'CWE-347' },
   { pattern: /[Aa][Pp][Ii][_\s-]?[Kk][Ee][Yy]\s*[=:]\s*['"][a-zA-Z0-9_\-]{20,}['"]/g, type: 'Potential API Key', severity: 'high', cwe: 'CWE-798' },
+  { pattern: /\bSK[0-9a-fA-F]{32}\b/g, type: 'Twilio API Key', severity: 'critical', cwe: 'CWE-798' },
+  { pattern: /\bAIza[0-9A-Za-z_-]{35,}\b/g, type: 'Google API Key', severity: 'critical', cwe: 'CWE-798' },
+  { pattern: /\b(ya29|1//[0-9A-Za-z_-]{43})[0-9A-Za-z_-]*\b/g, type: 'Google OAuth Access Token', severity: 'critical', cwe: 'CWE-798' },
+  { pattern: /\b(ya29|1//[0-9A-Za-z_-]{43})[0-9A-Za-z_-]*\b/g, type: 'Google OAuth Access Token', severity: 'critical', cwe: 'CWE-798' },
+  { pattern: /DefaultEndpointsProtocol=https;AccountName=[^;]+;AccountKey=[^;]{10,}/gi, type: 'Azure Storage Connection String', severity: 'critical', cwe: 'CWE-798' },
+  { pattern: /[Aa][Cc][Cc][Ee][Ss][Ss][_\s-]?[Tt][Oo][Kk][Ee][Nn]\s*[=:]\s*['"][a-zA-Z0-9_\-\.]{20,}['"]/g, type: 'Generic Access Token', severity: 'high', cwe: 'CWE-798' },
 ];
 
 function scanFile(filePath, targetDir) {

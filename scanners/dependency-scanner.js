@@ -12,6 +12,9 @@ const fs = require('fs');
 const SCANNER_ID = 'dependency';
 const SCANNER_NAME = 'Dependency CVE Scanner';
 
+// npm severity labels → CVSS numeric scores
+const NPM_CVSS_MAP = { critical: 9.8, high: 8.9, moderate: 6.9, low: 3.9 };
+
 async function runNpmAudit(dir) {
   return new Promise((resolve) => {
     const findings = [];
@@ -25,12 +28,12 @@ async function runNpmAudit(dir) {
           const vulnerabilities = result.vulnerabilities || {};
           for (const [pkg, vuln] of Object.entries(vulnerabilities)) {
             const severity = npmSeverityToLevel(vuln.severity);
-            const { cvss } = normalizeSeverity(severity);
+            const cvss = NPM_CVSS_MAP[vuln.severity?.toLowerCase()] || 5.0;
             findings.push(createFinding({
               scanner: SCANNER_ID, severity, title: `Vulnerable npm package: ${pkg}`,
-              description: `${vuln.title || 'Known vulnerability in ' + pkg}\nRange: ${vuln.range}`,
+              description: `${vuln.title || 'Known vulnerability in ' + pkg}${vuln.range ? '\nRange: ' + vuln.range : ''}`,
               cwe: 'CWE-1104', cvss, target: dir,
-              evidence: { package: pkg, severity: vuln.severity, range: vuln.range },
+              evidence: { package: pkg, severity: vuln.severity, range: vuln.range || 'unknown' },
               remediation: `Update ${pkg}: npm install ${pkg}@latest`
             }));
           }
@@ -75,10 +78,26 @@ async function run(context) {
   const { targetDir } = context;
   if (!targetDir) return [];
   const findings = [];
-  const hasNpm = fs.existsSync(path.join(targetDir, 'package-lock.json'));
-  const hasPip = fs.existsSync(path.join(targetDir, 'requirements.txt'));
-  const hasPackageJson = fs.existsSync(path.join(targetDir, 'package.json'));
-  if (hasNpm || hasPackageJson) findings.push(...await runNpmAudit(targetDir));
+
+  const pkgLock = path.join(targetDir, 'package-lock.json');
+  const reqTxt = path.join(targetDir, 'requirements.txt');
+
+  if (fs.existsSync(pkgLock)) {
+    try {
+      const stat = fs.statSync(pkgLock);
+      if (stat.size > 50 * 1024 * 1024) {
+        findings.push(createFinding({
+          scanner: SCANNER_ID, severity: 'low', title: 'package-lock.json exceeds 50MB — npm audit may timeout',
+          description: 'Lock file is unusually large; npm audit may hang or OOM. Consider pruning unused dependencies.',
+          target: targetDir, remediation: 'Run npm prune to remove unused packages, then retry.'
+        }));
+      }
+    } catch {}
+  }
+
+  const hasNpm = fs.existsSync(pkgLock);
+  const hasPip = fs.existsSync(reqTxt);
+  if (hasNpm) findings.push(...await runNpmAudit(targetDir));
   if (hasPip) findings.push(...await runPipAudit(targetDir));
   return findings;
 }
