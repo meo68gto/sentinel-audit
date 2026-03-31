@@ -1,0 +1,46 @@
+{
+  "name": "sentinel-audit",
+  "version": "1.0.0",
+  "description": "Automated pre-penetration-test security audit tool",
+  "main": "cli.js",
+  "bin": {
+    "sentinel-audit": "cli.js"
+  },
+  "scripts": {
+    "scan": "node cli.js scan",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --passWithNoTests",
+    "lint": "eslint cli.js scanners/ reporter/"
+  },
+  "keywords": [
+    "security",
+    "audit",
+    "penetration-testing",
+    "vulnerability-scanner",
+    "cli"
+  ],
+  "author": "Michael Ortiz (Batcave)",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.14.0",
+    "chalk": "^4.1.2",
+    "cheerio": "^1.2.0",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.7",
+    "fs-extra": "^11.2.0",
+    "jose": "^5.9.6",
+    "js-yaml": "^4.1.0",
+    "plist": "^3.1.0",
+    "ssl-checker": "^2.0.10",
+    "tablemark": "^3.1.0",
+    "tls": "^0.0.1"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "directories": {
+    "test": "tests"
+  }
+}

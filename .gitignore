@@ -1,0 +1,12 @@
+node_modules/
+output/
+*.log
+*.tmp
+.env
+.DS_Store
+coverage/
+dist/
+build/
+*.swp
+*.swo
+.scannerwork/
