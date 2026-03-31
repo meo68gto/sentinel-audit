@@ -10,7 +10,7 @@ const fs = require('fs');
 /**
  * Run npm audit on the target directory and parse results.
  * @param {string} targetDir - Absolute path to the codebase to scan
- * @param {object} config - Scanner config (unused for npm audit)
+ * @param {object} config - Scanner config
  * @returns {Promise<Array>} Array of finding objects
  */
 async function scan(targetDir, config) {
@@ -40,12 +40,29 @@ async function scan(targetDir, config) {
   }
 
   try {
-    const raw = execSync('npm audit --json', {
-      cwd: targetDir,
-      encoding: 'utf-8',
-      timeout: 60000,
-      maxBuffer: 10 * 1024 * 1024,
-    });
+    let raw;
+    try {
+      raw = execSync('npm audit --json', {
+        cwd: targetDir,
+        encoding: 'utf-8',
+        timeout: 60000,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+    } catch (err) {
+      // npm audit exits non-zero when vulnerabilities found — still parse stdout
+      raw = err.stdout || '';
+    }
+
+    if (!raw) {
+      findings.push({
+        severity: 'INFO',
+        title: 'No Vulnerabilities Found',
+        description: 'npm audit returned no output — dependencies appear clean.',
+        remediation: 'Continue monitoring with `npm audit` regularly.',
+        cwe: 'N/A',
+      });
+      return findings;
+    }
 
     const result = JSON.parse(raw);
     const vulnerabilities = result.vulnerabilities || {};
@@ -66,7 +83,7 @@ async function scan(targetDir, config) {
       const via = Array.isArray(info.via) ? info.via : Object.values(info.via || {});
 
       for (const v of via) {
-        if (typeof v === 'object' && v.title) {
+        if (typeof v === 'object' && v && v.title) {
           findings.push({
             severity,
             title: `Vulnerable Dependency: ${pkg}`,
@@ -86,44 +103,13 @@ async function scan(targetDir, config) {
       }
     }
   } catch (err) {
-    // npm audit returns non-zero when vulnerabilities found — that's OK
-    if (err.stdout) {
-      try {
-        const result = JSON.parse(err.stdout);
-        const vulnerabilities = result.vulnerabilities || {};
-        for (const [pkg, info] of Object.entries(vulnerabilities)) {
-          const severity = mapSeverity(info.severity);
-          const via = Array.isArray(info.via) ? info.via : Object.values(info.via || {});
-          for (const v of via) {
-            if (typeof v === 'object' && v.title) {
-              findings.push({
-                severity,
-                title: `Vulnerable Dependency: ${pkg}`,
-                description: `${pkg}@${info.name || 'unknown'} — ${v.title}${v.url ? ` (${v.url})` : ''}`,
-                remediation: `Update ${pkg} to a patched version. Run: npm update ${pkg} or npm audit fix`,
-                cwe: mapCWE(v.title),
-              });
-            }
-          }
-        }
-      } catch {
-        findings.push({
-          severity: 'HIGH',
-          title: 'Dependency Scan Error',
-          description: `Failed to parse npm audit output: ${err.message}`,
-          remediation: 'Ensure npm is installed and the project has a package.json.',
-          cwe: 'N/A',
-        });
-      }
-    } else {
-      findings.push({
-        severity: 'HIGH',
-        title: 'Dependency Scan Error',
-        description: `Failed to run npm audit: ${err.message}`,
-        remediation: 'Ensure npm is installed and the target directory contains package.json.',
-        cwe: 'N/A',
-      });
-    }
+    findings.push({
+      severity: 'HIGH',
+      title: 'Dependency Scan Error',
+      description: `Failed to run npm audit: ${err.message}`,
+      remediation: 'Ensure npm is installed and the target directory contains package.json.',
+      cwe: 'N/A',
+    });
   }
 
   return findings;

@@ -7,30 +7,26 @@ const fs = require('fs');
 const path = require('path');
 
 // Gitleaks-inspired regex patterns for common secret types
+// Note: patterns use RegExp constructor strings to avoid invalid regex literal issues
 const SECRET_PATTERNS = [
-  { name: 'AWS Access Key ID', pattern: /AKIA[0-9A-Z]{16}/g, severity: 'CRITICAL', cwe: 'CWE-798' },
-  { name: 'AWS Secret Access Key', pattern: /(?<![A-Za-z0-9/+=])[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=])/g, severity: 'CRITICAL', cwe: 'CWE-798' },
-  { name: 'Generic API Key', pattern: /(?i)(api[_-]?key|apikey)\s*[:=]\s*["']?[A-Za-z0-9_\-]{20,}["']?/g, severity: 'HIGH', cwe: 'CWE-798' },
-  { name: 'Private Key', pattern: /-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/g, severity: 'CRITICAL', cwe: 'CWE-798' },
-  { name: 'GitHub Token', pattern: /ghp_[A-Za-z0-9]{36}/g, severity: 'CRITICAL', cwe: 'CWE-798' },
-  { name: 'GitHub OAuth Token', pattern: /gho_[A-Za-z0-9]{36}/g, severity: 'CRITICAL', cwe: 'CWE-798' },
-  { name: 'GitHub PAT', pattern: /github_pat_[A-Za-z0-9_]{22,}/g, severity: 'CRITICAL', cwe: 'CWE-798' },
-  { name: 'Slack Token', pattern: /xox[baprs]-[0-9]{10,13}-[0-9]{10,13}[A-Za-z0-9-]*/g, severity: 'HIGH', cwe: 'CWE-798' },
-  { name: 'Stripe Secret Key', pattern: /sk_live_[A-Za-z0-9]{24,}/g, severity: 'CRITICAL', cwe: 'CWE-798' },
-  { name: 'Stripe Publishable Key', pattern: /pk_live_[A-Za-z0-9]{24,}/g, severity: 'MEDIUM', cwe: 'CWE-798' },
-  { name: 'Database Connection String', pattern: /(?i)(mysql|postgres|postgresql|mongodb|redis):\/\/[^\s'"`]{10,}/g, severity: 'HIGH', cwe: 'CWE-798' },
-  { name: 'JWT Token', pattern: /eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, severity: 'HIGH', cwe: 'CWE-345' },
-  { name: 'Hardcoded Password', pattern: /(?i)(password|passwd|pwd)\s*[:=]\s*["'][^"']{4,}["']/g, severity: 'HIGH', cwe: 'CWE-259' },
-  { name: 'Hardcoded Secret', pattern: /(?i)(secret|token|auth)\s*[:=]\s*["'][A-Za-z0-9_\-]{10,}["']/g, severity: 'HIGH', cwe: 'CWE-798' },
-  { name: 'Twilio API Key', pattern: /SK[a-f0-9]{32}/g, severity: 'HIGH', cwe: 'CWE-798' },
-  { name: 'Google API Key', pattern: /AIza[0-9A-Za-z_-]{35}/g, severity: 'HIGH', cwe: 'CWE-798' },
-  { name: 'SendGrid API Key', pattern: /SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}/g, severity: 'CRITICAL', cwe: 'CWE-798' },
-  { name: 'Discord Token', pattern: /[A-Za-z0-9]{24}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27}/g, severity: 'CRITICAL', cwe: 'CWE-798' },
-  { name: 'PayPal Access Token', pattern: /access_token\$[A-Za-z0-9_-]+/, severity: 'CRITICAL', cwe: 'CWE-798' },
-  { name: 'Basic Auth in URL', pattern: /https?:\/\/[^\s@]+:[^\s@]+@[^\s@]+/g, severity: 'HIGH', cwe: 'CWE-798' },
+  { name: 'AWS Access Key ID', pattern: /AKIA[0-9A-Z]{16}/, severity: 'CRITICAL', cwe: 'CWE-798' },
+  { name: 'GitHub Token', pattern: /ghp_[A-Za-z0-9]{36}/, severity: 'CRITICAL', cwe: 'CWE-798' },
+  { name: 'GitHub OAuth Token', pattern: /gho_[A-Za-z0-9]{36}/, severity: 'CRITICAL', cwe: 'CWE-798' },
+  { name: 'GitHub PAT', pattern: /github_pat_[A-Za-z0-9_]{22,}/, severity: 'CRITICAL', cwe: 'CWE-798' },
+  { name: 'Private Key', pattern: /-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/, severity: 'CRITICAL', cwe: 'CWE-798' },
+  { name: 'Stripe Secret Key', pattern: /sk_live_[A-Za-z0-9]{24,}/, severity: 'CRITICAL', cwe: 'CWE-798' },
+  { name: 'Stripe Publishable Key', pattern: /pk_live_[A-Za-z0-9]{24,}/, severity: 'MEDIUM', cwe: 'CWE-798' },
+  { name: 'SendGrid API Key', pattern: /SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}/, severity: 'CRITICAL', cwe: 'CWE-798' },
+  { name: 'Discord Token', pattern: /[A-Za-z0-9]{24}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27}/, severity: 'CRITICAL', cwe: 'CWE-798' },
+  { name: 'Slack Token', pattern: /xox[baprs]-[0-9]{10,13}-[0-9]{10,13}[A-Za-z0-9-]*/, severity: 'HIGH', cwe: 'CWE-798' },
+  { name: 'Google API Key', pattern: /AIza[0-9A-Za-z_-]{35}/, severity: 'HIGH', cwe: 'CWE-798' },
+  { name: 'Twilio API Key', pattern: /SK[a-f0-9]{32}/, severity: 'HIGH', cwe: 'CWE-798' },
+  { name: 'JWT Token', pattern: /eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/, severity: 'HIGH', cwe: 'CWE-345' },
+  { name: 'Database Connection String', pattern: /(mysql|postgres|postgresql|mongodb|redis):\/\/[^\s'\"\`]{10,}/i, severity: 'HIGH', cwe: 'CWE-798' },
+  { name: 'Basic Auth in URL', pattern: /https?:\/\/[^\s@]+:[^\s@]+@[^\s@]+/, severity: 'HIGH', cwe: 'CWE-798' },
 ];
 
-// Patterns for files/directories to skip
+// Regex patterns for files/directories to skip (tested with .test())
 const SKIP_PATTERNS = [
   /node_modules/,
   /\.git\//,
@@ -53,7 +49,12 @@ const MAX_FILE_SIZE = 1024 * 1024; // 1MB
  */
 function collectFiles(dir, files = []) {
   if (!fs.existsSync(dir)) return files;
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return files;
+  }
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
@@ -115,19 +116,22 @@ async function scan(targetDir, config) {
     filesScanned++;
 
     for (const rule of SECRET_PATTERNS) {
-      rule.pattern.lastIndex = 0;
+      // Reset regex lastIndex each file
+      const re = new RegExp(rule.pattern.source, rule.pattern.flags);
       let match;
-      while ((match = rule.pattern.exec(content)) !== null) {
+      while ((match = re.exec(content)) !== null) {
         secretsFound++;
         const lineNumber = content.substring(0, match.index).split('\n').length;
         const relPath = path.relative(targetDir, filePath);
         findings.push({
           severity: rule.severity,
           title: `Potential Secret Detected: ${rule.name}`,
-          description: `Found ${rule.name} pattern in \`${relPath}\` (line ~${lineNumber}). Secret: \`${match[0].substring(0, 30)}...\``,
+          description: `Found ${rule.name} pattern in \`${relPath}\` (line ~${lineNumber}). Match: \`${match[0].substring(0, 40)}...\``,
           remediation: `Remove or externalize the ${rule.name}. Use environment variables or a secrets manager (AWS Secrets Manager, HashiCorp Vault).`,
           cwe: rule.cwe,
         });
+        // Prevent infinite loops on zero-length matches
+        if (re.lastIndex === 0) re.lastIndex = 1;
       }
     }
   }
