@@ -2,209 +2,180 @@
 
 /**
  * Sentinel Audit — CLI Entry Point
- * Usage: sentinel-audit scan --target <url|dir|host> [--format json|markdown] [--output path]
+ * Usage: sentinel-audit scan --target <url|dir> [--dir <local-codebase>] [--format json|markdown] [--output <path>]
  */
 
-const { program, Option } = require('commander');
+const { Command } = require('commander');
 const path = require('path');
-const fs = require('fs-extra');
-const chalk = require('chalk');
+const fs = require('fs');
 
-const { runScan } = require('./core/scanner-engine');
-const { buildSummary, riskScore } = require('./core/findings');
-const { loadScanners } = require('./core/scanner-engine');
-const JsonReporter = require('./reporter/json-reporter');
-const MarkdownReporter = require('./reporter/markdown-reporter');
+// Scanner modules
+const dependencyScan = require('./scanners/dependency-scan');
+const secretsScan = require('./scanners/secrets-scan');
+const headersScan = require('./scanners/headers-scan');
+const portsScan = require('./scanners/ports-scan');
+const authScan = require('./scanners/auth-scan');
+const sslScan = require('./scanners/ssl-scan');
 
-// Load config
-const CONFIG_PATH = path.join(__dirname, 'config', 'default.json');
-let config = { scanners: {} };
-try {
-  config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-} catch {
-  console.warn('[sentinel-audit] Warning: config/default.json not found, using defaults');
-}
+// Reporter modules
+const jsonReporter = require('./reporter/json-report');
+const markdownReporter = require('./reporter/markdown-report');
 
-// Build version from package.json
-let version = '1.0.0';
-try {
-  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
-  version = pkg.version;
-} catch {}
+// Config
+const config = require('./config/default.json');
 
-// ─── Commands ────────────────────────────────────────────────────────────────
+// Output dir
+const OUTPUT_DIR = path.join(__dirname, 'output');
+
+const program = new Command();
 
 program
   .name('sentinel-audit')
-  .description('Automated pre-penetration-test security audit tool')
-  .version(version);
+  .description('CLI pre-penetration-test security audit tool')
+  .version('1.0.0');
 
-// scan command
 program
   .command('scan')
-  .description('Run a security audit scan')
-  .requiredOption('-t, --target <value>', 'Scan target: URL, directory path, or host')
-  .option('-d, --dir <path>', 'Directory to scan (for dependency/secrets scanners)')
-  .option('-o, --output <path>', 'Output file path (default: ./output/<scanId>.<format>)')
-  .option('-f, --format <type>', 'Output format: json or markdown (default: markdown)', 'markdown')
-  .option('-s, --scopes <list>', 'Comma-separated scanner IDs to run (default: all)', null)
-  .option('--no-color', 'Disable colored output')
-  .option('--verbose', 'Show verbose scanner progress')
-  .option('--min-severity <level>', 'Minimum severity to report: critical, high, medium, low, info', 'info')
+  .description('Run a security audit scan against a target')
+  .requiredOption('--target <value>', 'Target URL or hostname (required)')
+  .option('--dir <path>', 'Local codebase directory (for dependency and secrets scanning)')
+  .option('--format <format>', 'Output format: json or markdown (default: markdown)')
+  .option('--output <path>', 'Output file path (default: output/<timestamp>.<format>)')
   .action(async (opts) => {
-    await runScanCommand(opts);
+    await runScan(opts);
   });
 
-// list command
-program
-  .command('list')
-  .description('List all available scanners')
-  .action(() => {
-    const scanners = loadScanners();
-    console.log(chalk.bold('\n🔍 Available Scanners:\n'));
-    for (const [, scanner] of scanners) {
-      const dot = scanner.defaultTimeout ? '' : '·';
-      console.log(`  ${chalk.cyan(scanner.id.padEnd(16))} ${scanner.name}`);
-      console.log(`  ${' '.repeat(20)}${scanner.description}\n`);
-    }
-    console.log(`Total: ${scanners.size} scanner${scanners.size !== 1 ? 's' : ''}\n`);
-  });
+/**
+ * Run all scanners in parallel and aggregate findings.
+ */
+async function runScan(opts) {
+  const target = opts.target;
+  const format = opts.format || 'markdown';
+  const localDir = opts.dir || null;
+  const outputPath = opts.output || null;
 
-// check command
-program
-  .command('check')
-  .description('Check if Sentinel is properly installed')
-  .action(() => {
-    const scanners = loadScanners();
-    const deps = ['npm', 'node'];
-    console.log(chalk.bold('\n⚙️  Sentinel Audit Installation Check\n'));
-    console.log(`  Node.js:  ${chalk.green('✓')} ${process.version}`);
-    console.log(`  Scanners: ${chalk.green('✓')} ${scanners.size} loaded\n`);
-    console.log('  Config:   ' + (fs.existsSync(CONFIG_PATH) ? chalk.green('✓') : chalk.red('✗')) + ' config/default.json\n');
-  });
-
-// ─── Scan Command Implementation ─────────────────────────────────────────────
-
-async function runScanCommand(opts) {
-  const { target, dir, output, format, scopes, noColor, verbose } = opts;
-
-  // Validate target
-  if (!target) {
-    console.error(chalk.red('[sentinel-audit] Error: --target is required'));
-    process.exit(1);
-  }
-
-  // Determine target type
-  const targetType = target.startsWith('http') ? 'url' : fs.existsSync(target) ? 'directory' : 'host';
-
-  // Resolve targetDir if --dir is provided
-  const targetDir = dir || (targetType === 'directory' ? target : null);
-  const targetUrl = targetType === 'url' ? target : null;
-
-  console.log(chalk.bold('\n🦇 Sentinel Audit — Pre-Pen-Test Security Scanner\n'));
-  console.log(`  Target:    ${chalk.cyan(target)}`);
-  console.log(`  Type:      ${targetType}`);
-  if (targetDir) console.log(`  Directory: ${chalk.cyan(targetDir)}`);
-  if (scopes) console.log(`  Scopes:    ${chalk.cyan(scopes)}`);
-  console.log(`  Format:    ${chalk.cyan(format)}`);
+  console.log('\n🛡️  Sentinel Audit — Starting Scan');
+  console.log(`   Target: ${target}`);
+  console.log(`   Format: ${format}`);
+  console.log(`   Local dir: ${localDir || 'none'}`);
   console.log('');
 
-  try {
-    const result = await runScan({
-      target,
-      targetDir,
-      targetUrl,
-      scopes: scopes || null,
-      config
-    });
-
-    // Filter by min severity
-    const { filterByMinSeverity } = require('./core/findings');
-    const filtered = filterByMinSeverity(result.findings, opts.minSeverity || 'info');
-    result.findings = filtered;
-    result.summary = buildSummary(filtered);
-
-    // Print summary
-    printSummary(result, noColor);
-
-    // Generate output
-    let outputPath;
-    if (output) {
-      outputPath = output;
-    } else {
-      const outDir = path.join(__dirname, 'output');
-      fs.ensureDirSync(outDir);
-      const ext = format === 'json' ? 'json' : 'md';
-      outputPath = path.join(outDir, `${result.scanId}.${ext}`);
-    }
-
-    if (format === 'json') {
-      const reporter = new JsonReporter();
-      await reporter.write(result, outputPath);
-    } else {
-      const reporter = new MarkdownReporter();
-      await reporter.write(result, outputPath);
-    }
-
-    console.log(chalk.green(`\n  Report: ${chalk.cyan(outputPath)}\n`));
-
-    // Determine exit code based on severity thresholds
-    const thresholds = config.thresholds || {};
-    const critThresh = thresholds.critical || {};
-    const highThresh = thresholds.high || {};
-
-    if (result.summary.critical > 0 && critThresh.block) {
-      console.log(chalk.red.bold('  ✖ CRITICAL findings detected — deploy BLOCKED\n'));
+  // Resolve local dir to absolute
+  let absLocalDir = null;
+  if (localDir) {
+    absLocalDir = path.resolve(localDir);
+    if (!fs.existsSync(absLocalDir)) {
+      console.error(`❌ Local directory does not exist: ${absLocalDir}`);
       process.exit(1);
     }
-    if (result.summary.high > 0 && highThresh.block) {
-      console.log(chalk.yellow.bold('  ⚠ HIGH findings detected — review required\n'));
-      process.exit(1);
-    }
-
-    if (result.findings.length === 0) {
-      console.log(chalk.green.bold('  ✓ No findings — target appears clean\n'));
-      process.exit(0);
-    }
-
-    process.exit(0);
-
-  } catch (err) {
-    console.error(chalk.red(`\n[sentinel-audit] Scan failed: ${err.message}`));
-    if (verbose) console.error(err.stack);
-    process.exit(1);
   }
-}
 
-// ─── Console Summary ──────────────────────────────────────────────────────────
+  // Run all scanners in parallel
+  const [
+    headersResults,
+    portsResults,
+    authResults,
+    sslResults,
+    depResults,
+    secretsResults,
+  ] = await Promise.allSettled([
+    headersScan.scan(target, config),
+    portsScan.scan(target, config),
+    authScan.scan(target, config),
+    sslScan.scan(target, config),
+    localDir ? dependencyScan.scan(absLocalDir, config) : Promise.resolve([]),
+    localDir ? secretsScan.scan(absLocalDir, config) : Promise.resolve([]),
+  ]);
 
-function printSummary(result, noColor) {
-  const { summary, durationMs, riskScore: rs } = result;
-  const pad = (s, n) => String(s).padStart(n);
+  const allFindings = [];
 
-  console.log(chalk.bold('  Scan Results:\n'));
-  console.log(`  Duration: ${(durationMs / 1000).toFixed(1)}s`);
-  console.log(`  Risk Score: ${rs}/100\n`);
-
-  const levels = [
-    ['critical', summary.critical, chalk.red],
-    ['high',     summary.high,     chalk.yellow],
-    ['medium',   summary.medium,   chalk.yellow],
-    ['low',      summary.low,      chalk.green],
-    ['info',     summary.info,      chalk.gray],
-  ];
-
-  let total = 0;
-  for (const [level, count, colorFn] of levels) {
-    if (count > 0) {
-      const label = colorFn(`  ${count} ${level.toUpperCase()}`);
-      console.log(`  ${label}`);
-      total += count;
+  function collect(label, result) {
+    if (result.status === 'fulfilled') {
+      console.log(`✅ ${label}: ${result.value.length} finding(s)`);
+      allFindings.push(...result.value);
+    } else {
+      console.error(`❌ ${label}: ${result.reason?.message || result.reason}`);
+      allFindings.push({
+        severity: 'HIGH',
+        title: `${label} Scanner Error`,
+        description: `Scanner failed: ${result.reason?.message || result.reason}`,
+        remediation: 'Review scanner configuration and target accessibility.',
+        cwe: 'N/A',
+      });
     }
   }
-  console.log(`  ${chalk.bold('─'.repeat(36))}`);
-  console.log(`  ${chalk.bold(`${total} total finding${total !== 1 ? 's' : ''}`)}`);
+
+  collect('Headers Scan', headersResults);
+  collect('Ports Scan', portsResults);
+  collect('Auth Scan', authResults);
+  collect('SSL Scan', sslResults);
+  if (localDir) {
+    collect('Dependency Scan', depResults);
+    collect('Secrets Scan', secretsResults);
+  } else {
+    console.log('⏭️  Dependency Scan: skipped (no --dir)');
+    console.log('⏭️  Secrets Scan: skipped (no --dir)');
+  }
+
+  // Generate output path if not provided
+  let finalOutputPath = outputPath;
+  if (!finalOutputPath) {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const ext = format === 'json' ? 'json' : 'md';
+    finalOutputPath = path.join(OUTPUT_DIR, `sentinel-audit-${timestamp}.${ext}`);
+  }
+
+  // Ensure output directory exists
+  const outDir = path.dirname(finalOutputPath);
+  if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
+
+  // Generate report
+  const params = {
+    target,
+    findings: allFindings,
+    scanDate: new Date(),
+    outputPath: finalOutputPath,
+  };
+
+  if (format === 'json') {
+    const report = jsonReporter.generate(params);
+    console.log(`\n📄 JSON report written to: ${finalOutputPath}`);
+    console.log(report);
+  } else {
+    const report = markdownReporter.generate(params);
+    console.log(`\n📄 Markdown report written to: ${finalOutputPath}`);
+    // Print a preview
+    const lines = report.split('\n').slice(0, 30);
+    console.log('\n--- Report Preview ---');
+    console.log(lines.join('\n'));
+    if (report.split('\n').length > 30) console.log('\n... (truncated)');
+  }
+
+  // Summary
+  const summary = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+  for (const f of allFindings) {
+    const key = f.severity.toLowerCase();
+    if (summary[key] !== undefined) summary[key]++;
+  }
+
+  console.log('\n📊 Scan Summary:');
+  console.log(`   🔴 CRITICAL: ${summary.critical}`);
+  console.log(`   🟠 HIGH:     ${summary.high}`);
+  console.log(`   🟡 MEDIUM:   ${summary.medium}`);
+  console.log(`   🔵 LOW:      ${summary.low}`);
+  console.log(`   ⚪ INFO:     ${summary.info}`);
+  console.log(`   Total:      ${allFindings.length}`);
   console.log('');
+
+  if (summary.critical > 0) {
+    console.error('⚠️  Critical findings detected! Review immediately.');
+  } else if (summary.high > 0) {
+    console.warn('⚠️  High severity findings detected. Prioritize remediation.');
+  } else {
+    console.log('✅ No critical or high severity findings.');
+  }
+
+  console.log(`\n🛡️  Scan complete. Report saved to: ${finalOutputPath}\n`);
 }
 
 program.parse(process.argv);

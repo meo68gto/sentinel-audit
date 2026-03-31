@@ -5,7 +5,6 @@
  */
 
 const tls = require('tls');
-const https = require('https');
 const { URL } = require('url');
 const { createFinding } = require('../core/findings');
 const { normalizeSeverity } = require('../core/severity');
