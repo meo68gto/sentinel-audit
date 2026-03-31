@@ -121,7 +121,8 @@ async function scan(targetDir, config) {
       let match;
       while ((match = re.exec(content)) !== null) {
         secretsFound++;
-        const lineNumber = content.substring(0, match.index).split('\n').length;
+        const lineNumber = content.substring(0, match.index).split('
+').length;
         const relPath = path.relative(targetDir, filePath);
         findings.push({
           severity: rule.severity,
