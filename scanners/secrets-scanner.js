@@ -1,152 +1,111 @@
 /**
  * Sentinel Audit — Secrets Scanner
- * Scans a local codebase for leaked secrets using gitleaks-style regex patterns.
+ * Detects hardcoded credentials, API keys, tokens via gitleaks + regex patterns
  */
 
-const fs = require('fs');
+const { spawn } = require('child_process');
+const { createFinding } = require('../core/findings');
 const path = require('path');
+const fs = require('fs');
 
-// Gitleaks-inspired regex patterns for common secret types
-// Note: patterns use RegExp constructor strings to avoid invalid regex literal issues
+const SCANNER_ID = 'secrets';
+const SCANNER_ID_FULL = 'Secrets & Credential Scanner';
+
 const SECRET_PATTERNS = [
-  { name: 'AWS Access Key ID', pattern: /AKIA[0-9A-Z]{16}/, severity: 'CRITICAL', cwe: 'CWE-798' },
-  { name: 'GitHub Token', pattern: /ghp_[A-Za-z0-9]{36}/, severity: 'CRITICAL', cwe: 'CWE-798' },
-  { name: 'GitHub OAuth Token', pattern: /gho_[A-Za-z0-9]{36}/, severity: 'CRITICAL', cwe: 'CWE-798' },
-  { name: 'GitHub PAT', pattern: /github_pat_[A-Za-z0-9_]{22,}/, severity: 'CRITICAL', cwe: 'CWE-798' },
-  { name: 'Private Key', pattern: /-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/, severity: 'CRITICAL', cwe: 'CWE-798' },
-  { name: 'Stripe Secret Key', pattern: /sk_live_[A-Za-z0-9]{24,}/, severity: 'CRITICAL', cwe: 'CWE-798' },
-  { name: 'Stripe Publishable Key', pattern: /pk_live_[A-Za-z0-9]{24,}/, severity: 'MEDIUM', cwe: 'CWE-798' },
-  { name: 'SendGrid API Key', pattern: /SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}/, severity: 'CRITICAL', cwe: 'CWE-798' },
-  { name: 'Discord Token', pattern: /[A-Za-z0-9]{24}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27}/, severity: 'CRITICAL', cwe: 'CWE-798' },
-  { name: 'Slack Token', pattern: /xox[baprs]-[0-9]{10,13}-[0-9]{10,13}[A-Za-z0-9-]*/, severity: 'HIGH', cwe: 'CWE-798' },
-  { name: 'Google API Key', pattern: /AIza[0-9A-Za-z_-]{35}/, severity: 'HIGH', cwe: 'CWE-798' },
-  { name: 'Twilio API Key', pattern: /SK[a-f0-9]{32}/, severity: 'HIGH', cwe: 'CWE-798' },
-  { name: 'JWT Token', pattern: /eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/, severity: 'HIGH', cwe: 'CWE-345' },
-  { name: 'Database Connection String', pattern: /(mysql|postgres|postgresql|mongodb|redis):\/\/[^\s'\"\`]{10,}/i, severity: 'HIGH', cwe: 'CWE-798' },
-  { name: 'Basic Auth in URL', pattern: /https?:\/\/[^\s@]+:[^\s@]+@[^\s@]+/, severity: 'HIGH', cwe: 'CWE-798' },
+  { pattern: /\bAKIA[0-9][A-Z0-9]{16}\b/g, type: 'AWS Access Key ID', severity: 'critical', cwe: 'CWE-798' },
+  { pattern: /\b(gho_|ghp_|github_pat_)[a-zA-Z0-9_]{20,}\b/g, type: 'GitHub Personal Access Token', severity: 'critical', cwe: 'CWE-798' },
+  { pattern: /\b(sk_live_|pk_live_)[a-zA-Z0-9]{20,}\b/g, type: 'Stripe Live Key', severity: 'critical', cwe: 'CWE-798' },
+  { pattern: /\bxox[baprs]-[a-zA-Z0-9]{10,}\b/g, type: 'Slack Token', severity: 'critical', cwe: 'CWE-798' },
+  { pattern: /\b(eyJ[a-zA-Z0-9_-]+\.eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)\b/g, type: 'JWT Token', severity: 'high', cwe: 'CWE-347' },
+  { pattern: /\b((postgres|mysql|mongodb|redis|mssql):\/\/[^\s'"]+)/gi, type: 'Database Connection String', severity: 'high', cwe: 'CWE-798' },
+  { pattern: /-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----/g, type: 'Private Key Header', severity: 'critical', cwe: 'CWE-798' },
+  { pattern: /[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]\s*[=:]\s*['"][a-zA-Z0-9_\-$!@#%]{8,}['"]/g, type: 'Hardcoded Password', severity: 'critical', cwe: 'CWE-259' },
+  { pattern: /\bSG\.[a-zA-Z0-9_\-.]{30,}\b/g, type: 'SendGrid API Key', severity: 'critical', cwe: 'CWE-798' },
+  { pattern: /[Ss][Ee][Cc][Rr][Ee][Tt]\s*[=:]\s*['"][a-zA-Z0-9_\-]{20,}['"]/g, type: 'Potential Secret Token', severity: 'high', cwe: 'CWE-798' },
+  { pattern: /[Bb][Ee][Aa][Rr][Ee][Rr]\s+[Tt][Oo][Kk][Ee][Nn]\s*[=:]\s*['"][a-zA-Z0-9_\-.]{20,}['"]/g, type: 'Bearer Token', severity: 'high', cwe: 'CWE-347' },
+  { pattern: /[Aa][Pp][Ii][_\s-]?[Kk][Ee][Yy]\s*[=:]\s*['"][a-zA-Z0-9_\-]{20,}['"]/g, type: 'Potential API Key', severity: 'high', cwe: 'CWE-798' },
 ];
 
-// Regex patterns for files/directories to skip (tested with .test())
-const SKIP_PATTERNS = [
-  /node_modules/,
-  /\.git\//,
-  /\.DS_Store/,
-  /dist\//,
-  /build\//,
-  /\.min\.(js|css)/,
-  /package-lock\.json/,
-  /yarn\.lock/,
-  /pnpm-lock\.yaml/,
-  /\.png|\.jpg|\.gif|\.ico|\.woff2?|\.ttf|\.eot/,
-  /\.env\.example/,
-  /\.md/,
-];
-
-const MAX_FILE_SIZE = 1024 * 1024; // 1MB
-
-/**
- * Recursively collect all files in a directory, skipping node_modules etc.
- */
-function collectFiles(dir, files = []) {
-  if (!fs.existsSync(dir)) return files;
-  let entries;
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return files;
-  }
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      const shouldSkip = SKIP_PATTERNS.some((re) => re.test(fullPath));
-      if (!shouldSkip) collectFiles(fullPath, files);
-    } else {
-      const shouldSkip = SKIP_PATTERNS.some((re) => re.test(fullPath));
-      if (!shouldSkip) files.push(fullPath);
-    }
-  }
-  return files;
-}
-
-/**
- * Scan a local codebase for secrets.
- * @param {string} targetDir - Absolute path to scan
- * @param {object} config - Scanner config
- * @returns {Promise<Array>} Array of finding objects
- */
-async function scan(targetDir, config) {
+function scanFile(filePath, targetDir) {
   const findings = [];
-
-  if (!targetDir || !fs.existsSync(targetDir)) {
-    findings.push({
-      severity: 'INFO',
-      title: 'Secrets Scan Skipped',
-      description: `Target directory "${targetDir}" does not exist.`,
-      remediation: 'Provide a valid local directory path to scan for secrets.',
-      cwe: 'N/A',
-    });
-    return findings;
-  }
-
-  const files = collectFiles(targetDir);
-  if (files.length === 0) {
-    findings.push({
-      severity: 'INFO',
-      title: 'No Files to Scan',
-      description: 'No scannable files found in target directory.',
-      remediation: 'Ensure the target directory contains source code files.',
-      cwe: 'N/A',
-    });
-    return findings;
-  }
-
-  let filesScanned = 0;
-  let secretsFound = 0;
-
-  for (const filePath of files) {
-    let content;
-    try {
-      const stat = fs.statSync(filePath);
-      if (stat.size > MAX_FILE_SIZE) continue;
-      content = fs.readFileSync(filePath, 'utf-8');
-    } catch {
-      continue;
-    }
-
-    filesScanned++;
-
-    for (const rule of SECRET_PATTERNS) {
-      // Reset regex lastIndex each file
-      const re = new RegExp(rule.pattern.source, rule.pattern.flags);
-      let match;
-      while ((match = re.exec(content)) !== null) {
-        secretsFound++;
-        const lineNumber = content.substring(0, match.index).split('\n').length;
-        const relPath = path.relative(targetDir, filePath);
-        findings.push({
-          severity: rule.severity,
-          title: `Potential Secret Detected: ${rule.name}`,
-          description: `Found ${rule.name} pattern in \`${relPath}\` (line ~${lineNumber}). Match: \`${match[0].substring(0, 40)}...\``,
-          remediation: `Remove or externalize the ${rule.name}. Use environment variables or a secrets manager (AWS Secrets Manager, HashiCorp Vault).`,
-          cwe: rule.cwe,
-        });
-        // Prevent infinite loops on zero-length matches
-        if (re.lastIndex === 0) re.lastIndex = 1;
-      }
+  let content;
+  try { content = fs.readFileSync(filePath, 'utf8'); } catch { return findings; }
+  if (content.length > 5 * 1024 * 1024) return findings;
+  const skipExtensions = ['.min.js', '.map', '.lock'];
+  if (skipExtensions.some(ext => filePath.endsWith(ext))) return findings;
+  const skipDirs = ['node_modules', '.git', 'dist', 'build', 'coverage', '__pycache__', '.next'];
+  if (skipDirs.some(d => filePath.includes(path.sep + d + path.sep))) return findings;
+  for (const { pattern, type, severity, cwe } of SECRET_PATTERNS) {
+    pattern.lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(content)) !== null) {
+      const lineNum = content.slice(0, match.index).split('\n').length;
+      findings.push(createFinding({
+        scanner: SCANNER_ID, severity, title: `Potential hardcoded secret: ${type}`,
+        description: `Detected a ${type} pattern in source code at line ${lineNum}.`,
+        cwe, target: targetDir,
+        evidence: { file: path.relative(targetDir, filePath), line: lineNum, type },
+        filePath: path.relative(targetDir, filePath), lineNumber: lineNum,
+        remediation: `Remove the hardcoded secret. Use environment variables (process.env.SECRET_NAME) or a secrets manager. Rotate exposed credentials.`
+      }));
+      if (pattern.lastIndex === match.index) pattern.lastIndex++;
     }
   }
-
-  if (secretsFound === 0) {
-    findings.push({
-      severity: 'INFO',
-      title: 'No Secrets Detected',
-      description: `Scanned ${filesScanned} files — no gitleaks-pattern secrets found.`,
-      remediation: 'Continue using a secrets manager and rotating credentials regularly.',
-      cwe: 'N/A',
-    });
-  }
-
   return findings;
 }
 
-module.exports = { scan };
+function getSourceFiles(dir, extensions = ['.js', '.ts', '.jsx', '.tsx', '.py', '.java', '.rb', '.go', '.json', '.yaml', '.yml', '.env', '.sql']) {
+  const files = [];
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const n = entry.name;
+      if (n === 'node_modules' || n === '.git' || n === 'dist' || n === 'build' || n === '__pycache__' || n === '.next') continue;
+      const fp = path.join(dir, n);
+      if (entry.isDirectory()) files.push(...getSourceFiles(fp, extensions));
+      else if (extensions.some(ext => n.endsWith(ext))) files.push(fp);
+    }
+  } catch {}
+  return files;
+}
+
+async function runWithGitleaks(context) {
+  return new Promise((resolve) => {
+    const { targetDir } = context;
+    const findings = [];
+    try {
+      const gl = spawn('gitleaks', ['detect', '--source', targetDir, '--report-format', 'json', '--no-color'], { timeout: 120000 });
+      let stdout = '';
+      gl.stdout.on('data', d => { stdout += d; });
+      gl.on('close', () => {
+        if (stdout.trim()) {
+          for (const line of stdout.trim().split('\n')) {
+            try {
+              const f = JSON.parse(line);
+              findings.push(createFinding({
+                scanner: SCANNER_ID, severity: 'high', title: `Leaked secret: ${f.RuleID || 'credential'}`,
+                description: `Gitleaks detected ${f.RuleID || 'secret'} in ${f.File || 'unknown file'}`,
+                cwe: 'CWE-798', target: targetDir,
+                evidence: { file: f.File, line: f.StartLine, ruleId: f.RuleID },
+                filePath: f.File, lineNumber: f.StartLine,
+                remediation: 'Rotate the exposed credential immediately. Remove from git history with git-filter-repo.'
+              }));
+            } catch {}
+          }
+        }
+        resolve(findings);
+      });
+      gl.on('error', () => resolve([]));
+    } catch { resolve([]); }
+  });
+}
+
+async function run(context) {
+  const { targetDir } = context;
+  if (!targetDir) return [];
+  let findings = await runWithGitleaks(context);
+  for (const file of getSourceFiles(targetDir)) findings.push(...scanFile(file, targetDir));
+  return findings;
+}
+
+module.exports = { id: SCANNER_ID, name: SCANNER_ID_FULL, description: 'Detects hardcoded credentials, API keys, and tokens via gitleaks and regex patterns', run, defaultTimeout: 120000 };

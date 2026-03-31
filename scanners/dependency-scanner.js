@@ -1,135 +1,86 @@
 /**
- * Sentinel Audit — Dependency Scanner
- * Runs `npm audit --json` against a local codebase and surfaces findings.
+ * Sentinel Audit — Dependency CVE Scanner
+ * Runs npm audit / pip audit against a target directory
  */
 
-const { execSync } = require('child_process');
+const { spawn } = require('child_process');
+const { createFinding } = require('../core/findings');
+const { normalizeSeverity, npmSeverityToLevel } = require('../core/severity');
 const path = require('path');
 const fs = require('fs');
 
-/**
- * Run npm audit on the target directory and parse results.
- * @param {string} targetDir - Absolute path to the codebase to scan
- * @param {object} config - Scanner config
- * @returns {Promise<Array>} Array of finding objects
- */
-async function scan(targetDir, config) {
-  const findings = [];
+const SCANNER_ID = 'dependency';
+const SCANNER_NAME = 'Dependency CVE Scanner';
 
-  if (!targetDir || !fs.existsSync(targetDir)) {
-    findings.push({
-      severity: 'INFO',
-      title: 'Dependency Scan Skipped',
-      description: `Target directory "${targetDir}" does not exist or is not accessible.`,
-      remediation: 'Provide a valid local directory path containing a package.json file.',
-      cwe: 'N/A',
-    });
-    return findings;
-  }
-
-  const packageJsonPath = path.join(targetDir, 'package.json');
-  if (!fs.existsSync(packageJsonPath)) {
-    findings.push({
-      severity: 'INFO',
-      title: 'No package.json Found',
-      description: `No package.json found in "${targetDir}". Skipping dependency audit.`,
-      remediation: 'Ensure the target directory contains a Node.js project with package.json.',
-      cwe: 'N/A',
-    });
-    return findings;
-  }
-
-  try {
-    let raw;
-    try {
-      raw = execSync('npm audit --json', {
-        cwd: targetDir,
-        encoding: 'utf-8',
-        timeout: 60000,
-        maxBuffer: 10 * 1024 * 1024,
-      });
-    } catch (err) {
-      // npm audit exits non-zero when vulnerabilities found — still parse stdout
-      raw = err.stdout || '';
-    }
-
-    if (!raw) {
-      findings.push({
-        severity: 'INFO',
-        title: 'No Vulnerabilities Found',
-        description: 'npm audit returned no output — dependencies appear clean.',
-        remediation: 'Continue monitoring with `npm audit` regularly.',
-        cwe: 'N/A',
-      });
-      return findings;
-    }
-
-    const result = JSON.parse(raw);
-    const vulnerabilities = result.vulnerabilities || {};
-
-    if (Object.keys(vulnerabilities).length === 0) {
-      findings.push({
-        severity: 'INFO',
-        title: 'No Vulnerabilities Found',
-        description: 'npm audit found no known vulnerabilities in dependencies.',
-        remediation: 'Continue monitoring with `npm audit` regularly.',
-        cwe: 'N/A',
-      });
-      return findings;
-    }
-
-    for (const [pkg, info] of Object.entries(vulnerabilities)) {
-      const severity = mapSeverity(info.severity);
-      const via = Array.isArray(info.via) ? info.via : Object.values(info.via || {});
-
-      for (const v of via) {
-        if (typeof v === 'object' && v && v.title) {
-          findings.push({
-            severity,
-            title: `Vulnerable Dependency: ${pkg}`,
-            description: `${pkg}@${info.name || 'unknown'} — ${v.title}${v.url ? ` (${v.url})` : ''}`,
-            remediation: `Update ${pkg} to a patched version. Run: npm update ${pkg} or npm audit fix`,
-            cwe: mapCWE(v.title),
-          });
-        } else if (typeof v === 'string') {
-          findings.push({
-            severity,
-            title: `Vulnerable Dependency: ${pkg}`,
-            description: `${pkg} — ${v}`,
-            remediation: `Update ${pkg} to a patched version. Run: npm update ${pkg} or npm audit fix`,
-            cwe: 'CWE-1025',
-          });
-        }
+async function runNpmAudit(dir) {
+  return new Promise((resolve) => {
+    const findings = [];
+    const npm = spawn('npm', ['audit', '--json'], { cwd: dir, timeout: 90000 });
+    let stdout = '';
+    npm.stdout.on('data', d => { stdout += d; });
+    npm.on('close', () => {
+      if (stdout) {
+        try {
+          const result = JSON.parse(stdout);
+          const vulnerabilities = result.vulnerabilities || {};
+          for (const [pkg, vuln] of Object.entries(vulnerabilities)) {
+            const severity = npmSeverityToLevel(vuln.severity);
+            const { cvss } = normalizeSeverity(severity);
+            findings.push(createFinding({
+              scanner: SCANNER_ID, severity, title: `Vulnerable npm package: ${pkg}`,
+              description: `${vuln.title || 'Known vulnerability in ' + pkg}\nRange: ${vuln.range}`,
+              cwe: 'CWE-1104', cvss, target: dir,
+              evidence: { package: pkg, severity: vuln.severity, range: vuln.range },
+              remediation: `Update ${pkg}: npm install ${pkg}@latest`
+            }));
+          }
+        } catch {}
       }
-    }
-  } catch (err) {
-    findings.push({
-      severity: 'HIGH',
-      title: 'Dependency Scan Error',
-      description: `Failed to run npm audit: ${err.message}`,
-      remediation: 'Ensure npm is installed and the target directory contains package.json.',
-      cwe: 'N/A',
+      resolve(findings);
     });
-  }
+    npm.on('error', () => resolve(findings));
+  });
+}
 
+async function runPipAudit(dir) {
+  return new Promise((resolve) => {
+    const findings = [];
+    const pip = spawn('pip', ['audit', '--json'], { cwd: dir, timeout: 90000 });
+    let stdout = '';
+    pip.stdout.on('data', d => { stdout += d; });
+    pip.on('close', () => {
+      if (stdout) {
+        try {
+          const result = JSON.parse(stdout);
+          for (const vuln of (result.vulnerabilities || [])) {
+            const sev = vuln.vulns?.[0]?.cvss_v3?.score?.toLowerCase() || 'medium';
+            const { cvss } = normalizeSeverity(sev);
+            findings.push(createFinding({
+              scanner: SCANNER_ID, severity: sev, title: `Vulnerable Python package: ${vuln.name}`,
+              description: `${vuln.name}==${vuln.version} has known vulnerabilities.\nIDs: ${(vuln.vulns || []).map(v => v.id).join(', ')}`,
+              cwe: 'CWE-1104', cvss, target: dir,
+              evidence: { package: vuln.name, version: vuln.version },
+              remediation: `Update ${vuln.name}: pip install --upgrade ${vuln.name}`
+            }));
+          }
+        } catch {}
+      }
+      resolve(findings);
+    });
+    pip.on('error', () => resolve(findings));
+  });
+}
+
+async function run(context) {
+  const { targetDir } = context;
+  if (!targetDir) return [];
+  const findings = [];
+  const hasNpm = fs.existsSync(path.join(targetDir, 'package-lock.json'));
+  const hasPip = fs.existsSync(path.join(targetDir, 'requirements.txt'));
+  const hasPackageJson = fs.existsSync(path.join(targetDir, 'package.json'));
+  if (hasNpm || hasPackageJson) findings.push(...await runNpmAudit(targetDir));
+  if (hasPip) findings.push(...await runPipAudit(targetDir));
   return findings;
 }
 
-function mapSeverity(npmSeverity) {
-  const map = { critical: 'CRITICAL', high: 'HIGH', moderate: 'MEDIUM', low: 'LOW' };
-  return map[npmSeverity] || 'MEDIUM';
-}
-
-function mapCWE(title) {
-  const l = title.toLowerCase();
-  if (l.includes('prototype pollution')) return 'CWE-1321';
-  if (l.includes('command injection') || l.includes('os command')) return 'CWE-78';
-  if (l.includes('xss') || l.includes('cross-site')) return 'CWE-79';
-  if (l.includes('sql injection')) return 'CWE-89';
-  if (l.includes('path traversal')) return 'CWE-22';
-  if (l.includes('denial')) return 'CWE-400';
-  if (l.includes('sensitive data') || l.includes('credentials')) return 'CWE-200';
-  return 'CWE-1035';
-}
-
-module.exports = { scan };
+module.exports = { id: SCANNER_ID, name: SCANNER_NAME, description: 'Scans dependencies for known CVEs via npm/pip audit', run, defaultTimeout: 90000 };

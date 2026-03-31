@@ -1,109 +1,132 @@
 /**
  * Sentinel Audit — Markdown Reporter
- * Outputs a human-readable Markdown report with severity badges.
+ * Outputs scan results as formatted Markdown
  */
 
-const fs = require('fs');
+const fs = require('fs-extra');
 const path = require('path');
 
-const SEVERITY_ORDER = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'];
+const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
 
-const SEVERITY_EMOJI = {
-  CRITICAL: '🔴',
-  HIGH: '🟠',
-  MEDIUM: '🟡',
-  LOW: '🔵',
-  INFO: '⚪',
-};
-
-/**
- * Sort findings by severity.
- */
-function sortFindings(findings) {
-  return [...findings].sort((a, b) => {
-    const ai = SEVERITY_ORDER.indexOf(a.severity);
-    const bi = SEVERITY_ORDER.indexOf(b.severity);
-    return ai - bi;
-  });
+function escMd(str) {
+  if (!str) return '';
+  return String(str).replace(/[#*_`~]/g, '\\$&');
 }
 
-/**
- * Summarize findings by severity.
- */
-function summarize(findings) {
-  const summary = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
-  for (const f of findings) {
-    const key = f.severity.toLowerCase();
-    if (summary[key] !== undefined) summary[key]++;
-  }
-  return summary;
-}
+class MarkdownReporter {
+  async write(result, outputPath) {
+    await fs.ensureDir(path.dirname(outputPath));
+    const lines = [];
 
-/**
- * Generate a Markdown report.
- * @param {object} params - { target, findings, scanDate, outputPath }
- * @returns {string} Markdown report string
- */
-function generate(params) {
-  const { target, findings, scanDate, outputPath } = params;
-  const sortedFindings = sortFindings(findings);
-  const summary = summarize(findings);
-  const date = scanDate ? new Date(scanDate).toISOString() : new Date().toISOString();
+    // Header
+    lines.push(`# Sentinel Audit Report`);
+    lines.push('');
+    lines.push(`**Scan ID:** \`${result.scanId}\``);
+    lines.push(`**Target:** ${result.target}`);
+    lines.push(`**Type:** ${result.targetType}`);
+    lines.push(`**Timestamp:** ${(result.completedAt || new Date()).toISOString()}`);
+    lines.push(`**Duration:** ${(result.durationMs / 1000).toFixed(1)}s`);
+    lines.push(`**Risk Score:** ${result.riskScore}/100`);
+    lines.push('');
 
-  const lines = [];
+    // Summary
+    lines.push(`## Executive Summary`);
+    lines.push('');
+    lines.push(`| Severity | Count |`);
+    lines.push(`|----------|-------|`);
+    lines.push(`| 🔴 Critical | ${result.summary.critical} |`);
+    lines.push(`| 🟠 High     | ${result.summary.high} |`);
+    lines.push(`| 🟡 Medium   | ${result.summary.medium} |`);
+    lines.push(`| 🟢 Low      | ${result.summary.low} |`);
+    lines.push(`| 🔵 Info     | ${result.summary.info} |`);
+    lines.push('');
+    lines.push(`**Total Findings:** ${result.findings.length}`);
 
-  lines.push('# 🔍 Sentinel Audit Report\n');
-  lines.push('**Scan Date:** ' + date + '  ');
-  lines.push('**Target:** `' + target + '`  ');
-  lines.push('**Total Findings:** ' + findings.length + '\n');
+    const rs = result.riskScore;
+    let riskLevel, riskAdvice;
+    if (rs >= 50)      { riskLevel = '🔴 CRITICAL'; riskAdvice = 'Do not deploy. Remediate critical and high findings immediately.'; }
+    else if (rs >= 25) { riskLevel = '🟠 HIGH';      riskAdvice = 'High risk. Block deployment until critical findings resolved.'; }
+    else if (rs >= 10) { riskLevel = '🟡 MEDIUM';   riskAdvice = 'Moderate risk. Address high-severity findings before deploying.'; }
+    else if (rs >= 1)  { riskLevel = '🟢 LOW';      riskAdvice = 'Low risk. Fix in next sprint cycle.'; }
+    else               { riskLevel = '✅ MINIMAL';    riskAdvice = 'No significant findings. Target appears secure.'; }
+    lines.push('');
+    lines.push(`**Risk Level:** ${riskLevel}`);
+    lines.push(`**Advice:** ${riskAdvice}`);
+    lines.push('');
+    lines.push(`---`);
+    lines.push('');
 
-  lines.push('## 📊 Summary\n');
-  lines.push('| Severity | Count |');
-  lines.push('|----------|-------|');
-  lines.push('| 🔴 CRITICAL | ' + summary.critical + ' |');
-  lines.push('| 🟠 HIGH | ' + summary.high + ' |');
-  lines.push('| 🟡 MEDIUM | ' + summary.medium + ' |');
-  lines.push('| 🔵 LOW | ' + summary.low + ' |');
-  lines.push('| ⚪ INFO | ' + summary.info + ' |');
-  lines.push('');
+    // Detailed Findings — grouped by severity
+    lines.push(`## Detailed Findings`);
+    lines.push('');
+    const bySeverity = {};
+    for (const level of SEVERITY_ORDER) bySeverity[level] = result.findings.filter(f => f.severity === level);
 
-  if (summary.critical > 0 || summary.high > 0) {
-    const urgent = summary.critical + summary.high;
-    lines.push('> ⚠️ **Attention required:** ' + urgent + ' critical/high severity finding(s) need immediate review.\n');
-  }
+    for (const level of SEVERITY_ORDER) {
+      const findings = bySeverity[level];
+      if (!findings || findings.length === 0) continue;
+      const emoji = { critical: '🔴', high: '🟠', medium: '🟡', low: '🟢', info: '🔵' }[level];
+      lines.push(`### ${emoji} ${level.toUpperCase()} (${findings.length})`);
+      lines.push('');
 
-  lines.push('## 🔎 Detailed Findings\n');
-
-  if (sortedFindings.length === 0) {
-    lines.push('*No findings recorded.*\n');
-  } else {
-    for (let i = 0; i < sortedFindings.length; i++) {
-      const f = sortedFindings[i];
-      const emoji = SEVERITY_EMOJI[f.severity] || '⚪';
-      lines.push('### ' + (i + 1) + '. ' + emoji + ' ' + f.severity + ' — ' + f.title + '\n');
-      lines.push('**Description:** ' + f.description + '\n');
-      if (f.cwe && f.cwe !== 'N/A') {
-        lines.push('**CWE:** `' + f.cwe + '`\n');
+      for (let i = 0; i < findings.length; i++) {
+        const f = findings[i];
+        lines.push(`#### ${i + 1}. ${escMd(f.title)}`);
+        lines.push('');
+        lines.push(`| Field | Value |`);
+        lines.push(`|-------|-------|`);
+        lines.push(`| **ID** | \`${f.id}\` |`);
+        lines.push(`| **Scanner** | ${f.scanner} |`);
+        lines.push(`| **Severity** | ${level.toUpperCase()} |`);
+        if (f.cwe) lines.push(`| **CWE** | ${f.cwe} |`);
+        if (f.cvss) lines.push(`| **CVSS** | ${f.cvss} |`);
+        if (f.target) lines.push(`| **Target** | ${escMd(String(f.target))} |`);
+        if (f.filePath) lines.push(`| **File** | \`${escMd(String(f.filePath))}\` |`);
+        if (f.lineNumber) lines.push(`| **Line** | ${f.lineNumber} |`);
+        lines.push('');
+        if (f.description) {
+          lines.push(`**Description:**`);
+          lines.push('');
+          lines.push(escMd(f.description));
+          lines.push('');
+        }
+        if (f.evidence && Object.keys(f.evidence).length > 0) {
+          lines.push(`**Evidence:**`);
+          lines.push('');
+          lines.push('```');
+          lines.push(JSON.stringify(f.evidence, null, 2));
+          lines.push('```');
+          lines.push('');
+        }
+        if (f.remediation) {
+          lines.push(`**Remediation:**`);
+          lines.push('');
+          lines.push(escMd(f.remediation));
+          lines.push('');
+        }
+        lines.push(`---`);
+        lines.push('');
       }
-      lines.push('**Remediation:** ' + f.remediation + '\n');
-      lines.push('---\n');
     }
+
+    // Scanner Summary
+    lines.push('');
+    lines.push(`## Scanner Execution Summary`);
+    lines.push('');
+    lines.push(`| Scanner | Status | Duration | Findings |`);
+    lines.push(`|---------|--------|----------|----------|`);
+    for (const sr of result.scannerResults) {
+      const icon = sr.status === 'complete' ? '✅' : sr.status === 'error' ? '❌' : '⏭';
+      lines.push(`| ${sr.name} | ${icon} ${sr.status} | ${(sr.durationMs / 1000).toFixed(1)}s | ${sr.findingCount} |`);
+    }
+    lines.push('');
+    lines.push('---');
+    lines.push('');
+    lines.push(`*Generated by Sentinel Audit v1.0.0 — Batcave Security*`);
+    lines.push(`*Report date: ${new Date().toISOString()}*`);
+
+    await fs.writeFile(outputPath, lines.join('\n'), 'utf8');
   }
-
-  lines.push('## ℹ️ About This Report\n');
-  lines.push('This report was generated by **Sentinel Audit** — a CLI pre-penetration-test security audit tool.\n');
-  lines.push('Severity ratings follow the standard: CRITICAL > HIGH > MEDIUM > LOW > INFO.\n');
-  lines.push('Each finding includes a CWE (Common Weakness Enumeration) reference.\n');
-
-  const markdown = lines.join('\n');
-
-  if (outputPath) {
-    const dir = path.dirname(outputPath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(outputPath, markdown, 'utf-8');
-  }
-
-  return markdown;
 }
 
-module.exports = { generate };
+module.exports = MarkdownReporter;

@@ -1,163 +1,410 @@
-# 🔍 Sentinel Audit Report
+# Sentinel Audit Report
 
-**Scan Date:** 2026-03-31T04:24:05.549Z  
-**Target:** `https://example.com`  
-**Total Findings:** 14
+**Scan ID:** `scan_20260331042819`
+**Target:** https://example.com
+**Type:** url
+**Timestamp:** 2026-03-31T04:28:26.047Z
+**Duration:** 6.0s
+**Risk Score:** 47/100
 
-## 📊 Summary
+## Executive Summary
 
 | Severity | Count |
 |----------|-------|
-| 🔴 CRITICAL | 0 |
-| 🟠 HIGH | 4 |
-| 🟡 MEDIUM | 4 |
-| 🔵 LOW | 4 |
-| ⚪ INFO | 2 |
+| 🔴 Critical | 0 |
+| 🟠 High     | 3 |
+| 🟡 Medium   | 3 |
+| 🟢 Low      | 5 |
+| 🔵 Info     | 0 |
 
-> ⚠️ **Attention required:** 4 critical/high severity finding(s) need immediate review.
+**Total Findings:** 11
 
-## 🔎 Detailed Findings
-
-### 1. 🟠 HIGH — Missing Security Header: Content-Security-Policy
-
-**Description:** Content-Security-Policy (CSP) header is missing. CSP helps prevent XSS and data injection attacks.
-
-**CWE:** `CWE-693`
-
-**Remediation:** Add a strict Content-Security-Policy header, e.g.: Content-Security-Policy: default-src 'self'; script-src 'self'
+**Risk Level:** 🟠 HIGH
+**Advice:** High risk. Block deployment until critical findings resolved.
 
 ---
 
-### 2. 🟠 HIGH — Missing Security Header: Strict-Transport-Security
+## Detailed Findings
 
-**Description:** Strict-Transport-Security (HSTS) header is missing. Without HSTS, browsers may communicate over unencrypted HTTP.
+### 🟠 HIGH (3)
 
-**CWE:** `CWE-311`
+#### 1. Strict-Transport-Security: Header missing — HTTPS downgrades possible
 
-**Remediation:** Add Strict-Transport-Security header, e.g.: Strict-Transport-Security: max-age=31536000; includeSubDomains
+| Field | Value |
+|-------|-------|
+| **ID** | `SENTINEL-001` |
+| **Scanner** | headers |
+| **Severity** | HIGH |
+| **CWE** | CWE-523 |
+| **CVSS** | 8.9 |
+| **Target** | https://example.com |
 
----
+**Description:**
 
-### 3. 🟠 HIGH — Open Port Detected: 8080/TCP (HTTP-Alt)
+Header missing — HTTPS downgrades possible
 
-**Description:** HTTP alternative port often used for dev servers or proxies. May expose internal services. Host: example.com, Port: 8080/TCP
+**Evidence:**
 
-**CWE:** `CWE-319`
+```
+{
+  "header": "Strict-Transport-Security",
+  "actualValue": "(not set)"
+}
+```
 
-**Remediation:** Review whether port 8080 (HTTP-Alt) needs to be exposed. Block port 8080 at the firewall unless intentionally serving a public service. Verify the service requires internet access.
+**Remediation:**
 
----
-
-### 4. 🟠 HIGH — HTTP Available on Port 80 (No Redirect to HTTPS)
-
-**Description:** HTTP on port 80 serves content over unencrypted HTTP without redirecting to HTTPS.
-
-**CWE:** `CWE-319`
-
-**Remediation:** Configure HTTP (port 80) to 301-redirect all requests to HTTPS.
-
----
-
-### 5. 🟡 MEDIUM — Missing Security Header: X-Frame-Options
-
-**Description:** X-Frame-Options header is missing. This leaves the site vulnerable to clickjacking attacks.
-
-**CWE:** `CWE-1021`
-
-**Remediation:** Add X-Frame-Options: DENY or X-Frame-Options: SAMEORIGIN to prevent framing
+Set: Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
 
 ---
 
-### 6. 🟡 MEDIUM — Missing Security Header: X-Content-Type-Options
+#### 2. Content-Security-Policy: CSP missing — XSS and data injection possible
 
-**Description:** X-Content-Type-Options header is missing. Without it, browsers may MIME-sniff and execute content as script.
+| Field | Value |
+|-------|-------|
+| **ID** | `SENTINEL-003` |
+| **Scanner** | headers |
+| **Severity** | HIGH |
+| **CWE** | CWE-346 |
+| **CVSS** | 8.9 |
+| **Target** | https://example.com |
 
-**CWE:** `CWE-693`
+**Description:**
 
-**Remediation:** Add X-Content-Type-Options: nosniff
+CSP missing — XSS and data injection possible
 
----
+**Evidence:**
 
-### 7. 🟡 MEDIUM — Open Port Detected: 80/TCP (HTTP)
+```
+{
+  "header": "Content-Security-Policy",
+  "actualValue": "(not set)"
+}
+```
 
-**Description:** HTTP does not encrypt traffic in transit. Should redirect to HTTPS. Host: example.com, Port: 80/TCP
+**Remediation:**
 
-**CWE:** `CWE-319`
-
-**Remediation:** Review whether port 80 (HTTP) needs to be exposed. Verify this port needs to be internet-accessible. Apply principle of least privilege.
-
----
-
-### 8. 🟡 MEDIUM — Open Port Detected: 8443/TCP (HTTPS-Alt)
-
-**Description:** HTTPS alternative port. Verify it serves valid TLS certificates. Host: example.com, Port: 8443/TCP
-
-**Remediation:** Review whether port 8443 (HTTPS-Alt) needs to be exposed. Verify this port needs to be internet-accessible. Apply principle of least privilege.
-
----
-
-### 9. 🔵 LOW — Missing Security Header: Referrer-Policy
-
-**Description:** Referrer-Policy header is missing. Without it, sensitive URL information may leak via the Referer header.
-
-**CWE:** `CWE-200`
-
-**Remediation:** Add Referrer-Policy: strict-origin-when-cross-origin or Referrer-Policy: no-referrer
+Define strict CSP: default-src 'self'; script-src 'self'; object-src 'none'; frame-ancestors 'none'
 
 ---
 
-### 10. 🔵 LOW — Missing Security Header: Permissions-Policy
+#### 3. No rate limiting on /login
 
-**Description:** Permissions-Policy (Feature-Policy) header is missing. Controls which browser features can be used.
+| Field | Value |
+|-------|-------|
+| **ID** | `SENTINEL-007` |
+| **Scanner** | auth |
+| **Severity** | HIGH |
+| **CWE** | CWE-307 |
+| **CVSS** | 7.5 |
+| **Target** | https://example.com/login |
 
-**CWE:** `CWE-693`
+**Description:**
 
-**Remediation:** Add Permissions-Policy header to disable unnecessary browser features, e.g.: Permissions-Policy: geolocation=(), microphone=()
+Sent 20 rapid POST requests without any rate limiting response (no 429, no lockout). Enables unlimited brute-force attacks.
+
+**Evidence:**
+
+```
+{
+  "endpoint": "https://example.com/login",
+  "requestsSent": 20,
+  "responses": [
+    {
+      "status": 405,
+      "i": 0
+    },
+    {
+      "status": 405,
+      "i": 1
+    },
+    {
+      "status": 405,
+      "i": 2
+    },
+    {
+      "status": 405,
+      "i": 3
+    },
+    {
+      "status": 405,
+      "i": 4
+    }
+  ]
+}
+```
+
+**Remediation:**
+
+Implement rate limiting: 5 attempts per minute per IP for login endpoints. Return 429 with Retry-After header.
 
 ---
 
-### 11. 🔵 LOW — Open Port Detected: 443/TCP (HTTPS)
+### 🟡 MEDIUM (3)
 
-**Description:** HTTPS is expected for secure communication. Host: example.com, Port: 443/TCP
+#### 1. X-Frame-Options: Header missing — clickjacking possible
 
-**Remediation:** Review whether port 443 (HTTPS) needs to be exposed. Verify this port needs to be internet-accessible. Apply principle of least privilege.
+| Field | Value |
+|-------|-------|
+| **ID** | `SENTINEL-002` |
+| **Scanner** | headers |
+| **Severity** | MEDIUM |
+| **CWE** | CWE-346 |
+| **CVSS** | 6.9 |
+| **Target** | https://example.com |
 
----
+**Description:**
 
-### 12. 🔵 LOW — Missing X-Content-Type-Options
+Header missing — clickjacking possible
 
-**Description:** Without this header, browsers may MIME-sniff responses and execute content as script, potentially bypassing auth-related protections.
+**Evidence:**
 
-**CWE:** `CWE-693`
+```
+{
+  "header": "X-Frame-Options",
+  "actualValue": "(not set)"
+}
+```
 
-**Remediation:** Add X-Content-Type-Options: nosniff
+**Remediation:**
 
----
-
-### 13. ⚪ INFO — Missing Security Header: X-XSS-Protection
-
-**Description:** X-XSS-Protection header is present but deprecated. Modern browsers rely on CSP instead.
-
-**CWE:** `CWE-79`
-
-**Remediation:** Consider removing X-XSS-Protection and relying on Content-Security-Policy for XSS protection.
-
----
-
-### 14. ⚪ INFO — Server Header Exposes Version Information
-
-**Description:** Server header reveals: "cloudflare". Attackers can use this to target known vulnerabilities.
-
-**CWE:** `CWE-200`
-
-**Remediation:** Suppress or genericize the Server header, e.g., Server: nginx or Server: Apache.
+Set: X-Frame-Options: DENY
 
 ---
 
-## ℹ️ About This Report
+#### 2. Port 8080 (HTTP-Alt) is open
 
-This report was generated by **Sentinel Audit** — a CLI pre-penetration-test security audit tool.
+| Field | Value |
+|-------|-------|
+| **ID** | `SENTINEL-010` |
+| **Scanner** | ports |
+| **Severity** | MEDIUM |
+| **CWE** | CWE-200 |
+| **CVSS** | 6.9 |
+| **Target** | example.com:8080 |
 
-Severity ratings follow the standard: CRITICAL > HIGH > MEDIUM > LOW > INFO.
+**Description:**
 
-Each finding includes a CWE (Common Weakness Enumeration) reference.
+Often dev/debug interfaces — review if intentional
+
+**Evidence:**
+
+```
+{
+  "host": "example.com",
+  "ip": "104.18.26.120",
+  "port": 8080,
+  "service": "HTTP-Alt"
+}
+```
+
+**Remediation:**
+
+Database port 8080 must NEVER be internet-facing. Bind to 127.0.0.1 or internal network.
+
+---
+
+#### 3. Port 8443 (HTTPS-Alt) is open
+
+| Field | Value |
+|-------|-------|
+| **ID** | `SENTINEL-011` |
+| **Scanner** | ports |
+| **Severity** | MEDIUM |
+| **CWE** | CWE-200 |
+| **CVSS** | 6.9 |
+| **Target** | example.com:8443 |
+
+**Description:**
+
+Often admin/debug interfaces — verify TLS certs
+
+**Evidence:**
+
+```
+{
+  "host": "example.com",
+  "ip": "104.18.26.120",
+  "port": 8443,
+  "service": "HTTPS-Alt"
+}
+```
+
+**Remediation:**
+
+Database port 8443 must NEVER be internet-facing. Bind to 127.0.0.1 or internal network.
+
+---
+
+### 🟢 LOW (5)
+
+#### 1. X-Content-Type-Options: Invalid value "undefined" — must be "nosniff"
+
+| Field | Value |
+|-------|-------|
+| **ID** | `SENTINEL-004` |
+| **Scanner** | headers |
+| **Severity** | LOW |
+| **CWE** | CWE-693 |
+| **CVSS** | 3.9 |
+| **Target** | https://example.com |
+
+**Description:**
+
+Invalid value "undefined" — must be "nosniff"
+
+**Evidence:**
+
+```
+{
+  "header": "X-Content-Type-Options",
+  "actualValue": "(not set)"
+}
+```
+
+**Remediation:**
+
+Set: X-Content-Type-Options: nosniff
+
+---
+
+#### 2. Referrer-Policy: Referrer-Policy missing — referrer leaks possible
+
+| Field | Value |
+|-------|-------|
+| **ID** | `SENTINEL-005` |
+| **Scanner** | headers |
+| **Severity** | LOW |
+| **CWE** | CWE-688 |
+| **CVSS** | 3.9 |
+| **Target** | https://example.com |
+
+**Description:**
+
+Referrer-Policy missing — referrer leaks possible
+
+**Evidence:**
+
+```
+{
+  "header": "Referrer-Policy",
+  "actualValue": "(not set)"
+}
+```
+
+**Remediation:**
+
+Set: Referrer-Policy: strict-origin-when-cross-origin
+
+---
+
+#### 3. Permissions-Policy: Permissions-Policy missing — unused browser features accessible
+
+| Field | Value |
+|-------|-------|
+| **ID** | `SENTINEL-006` |
+| **Scanner** | headers |
+| **Severity** | LOW |
+| **CWE** | CWE-693 |
+| **CVSS** | 3.9 |
+| **Target** | https://example.com |
+
+**Description:**
+
+Permissions-Policy missing — unused browser features accessible
+
+**Evidence:**
+
+```
+{
+  "header": "Permissions-Policy",
+  "actualValue": "(not set)"
+}
+```
+
+**Remediation:**
+
+Set Permissions-Policy to disable unused features: geolocation=(), camera=(), microphone=()
+
+---
+
+#### 4. Port 80 (HTTP) is open
+
+| Field | Value |
+|-------|-------|
+| **ID** | `SENTINEL-008` |
+| **Scanner** | ports |
+| **Severity** | LOW |
+| **CWE** | CWE-200 |
+| **CVSS** | 3.9 |
+| **Target** | example.com:80 |
+
+**Description:**
+
+Unencrypted web traffic; should redirect to HTTPS
+
+**Evidence:**
+
+```
+{
+  "host": "example.com",
+  "ip": "104.18.26.120",
+  "port": 80,
+  "service": "HTTP"
+}
+```
+
+**Remediation:**
+
+Review whether port 80 needs to be internet-facing. If not, block it via firewall.
+
+---
+
+#### 5. Port 443 (HTTPS) is open
+
+| Field | Value |
+|-------|-------|
+| **ID** | `SENTINEL-009` |
+| **Scanner** | ports |
+| **Severity** | LOW |
+| **CWE** | CWE-200 |
+| **CVSS** | 3.9 |
+| **Target** | example.com:443 |
+
+**Description:**
+
+Check SSL/TLS separately
+
+**Evidence:**
+
+```
+{
+  "host": "example.com",
+  "ip": "104.18.26.120",
+  "port": 443,
+  "service": "HTTPS"
+}
+```
+
+**Remediation:**
+
+Review whether port 443 needs to be internet-facing. If not, block it via firewall.
+
+---
+
+
+## Scanner Execution Summary
+
+| Scanner | Status | Duration | Findings |
+|---------|--------|----------|----------|
+| Authentication Security Scanner | ✅ complete | 0.3s | 1 |
+| Dependency CVE Scanner | ✅ complete | 0.0s | 0 |
+| Security Headers Scanner | ✅ complete | 0.1s | 6 |
+| Network Ports Scanner | ✅ complete | 6.0s | 4 |
+| Secrets & Credential Scanner | ✅ complete | 0.0s | 0 |
+| SSL/TLS Certificate Scanner | ✅ complete | 0.0s | 0 |
+
+---
+
+*Generated by Sentinel Audit v1.0.0 — Batcave Security*
+*Report date: 2026-03-31T04:28:26.050Z*
